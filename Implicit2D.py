@@ -68,12 +68,20 @@ class ImplicitObject:
 
         return np.array([[dx / length],[dy / length]])
 
+    def visualize_bitmap(self, xmin, xmax, ymin, ymax, num_points=200):
+        self.visualize(xmin, xmax, ymin, ymax, 'bitmap', num_points)
 
-    def visualize(self, xmin, xmax, ymin, ymax, num_points=1000):
+    def visualize_distance_field(self, xmin, xmax, ymin, ymax, num_points=200):
+        self.visualize(xmin, xmax, ymin, ymax, 'distance_field', num_points)
+
+
+    def visualize(self, xmin, xmax, ymin, ymax, visualize_type = 'bitmap', num_points=200):
         
         assert xmin!=xmax, "incorrect usage xmin == xmax"
         assert ymin!=ymax, "incorrect usage ymin == ymax"
-        
+        assert visualize_type in ['bitmap', 'distance_field'], \
+            'visualize_type should be either bitmap or distance_field, but not {}'.format(visualize_type)
+
         visualize_matrix = np.empty((num_points, num_points));
         
         import matplotlib.pyplot as plt
@@ -83,8 +91,15 @@ class ImplicitObject:
             for y_counter in range(len(y_linspace)):
                 x = x_linspace[x_counter]
                 y = y_linspace[y_counter]
-                visualize_matrix[x_counter][y_counter] = self.is_point_inside(np.array([[x],[y]]))
-        
+
+                if visualize_type == 'bitmap':
+                    visualize_matrix[x_counter][y_counter] = \
+                        not self.is_point_inside(np.array([[x],[y]])) # for mapping the color of distance_field
+                elif visualize_type == 'distance_field':
+                    visualize_matrix[x_counter][y_counter] = self.eval_point(np.array([[x],[y]]))
+                else:
+                    raise ValueError('Unknown visualize_type -> {}'.format(visualize_type))
+
         visualize_matrix = np.rot90(visualize_matrix)
         assert(visualize_matrix.shape == (num_points, num_points))
 
@@ -175,8 +190,6 @@ class Cell:
         self.point_2 = np.array([[xmin],[ymax]])
         self.point_3 = np.array([[xmax],[ymax]])
         
-        self.cell_type = cell_type
-        
         if self.is_Root():
             self.to_Root()
         
@@ -246,7 +259,7 @@ class Cell:
                 pass
 
     def eval_type(self, implicit_object_instance):
-        assert self.is_NotInitialized()
+        assert self.is_NotInitialized(), 'this function is only called when the cell type is not initialized'
         is_point0_inside = implicit_object_instance.is_point_inside(self.point_0)
         is_point1_inside = implicit_object_instance.is_point_inside(self.point_1)
         is_point2_inside = implicit_object_instance.is_point_inside(self.point_2)
@@ -288,9 +301,9 @@ class Cell:
     
     def visualize(self, ax1):
         if self.cell_type in ['Empty', 'Full', 'Leaf', 'NotInitialized']:
-            if self.cell_type == 'Empty':
+            if self.is_Empty():
                 color = 'grey'
-            elif self.cell_type == 'Full':
+            elif self.is_Full():
                 color = 'black'
             elif self.is_Leaf():
                 color = 'green'
@@ -577,34 +590,29 @@ class Cell:
         return self.dual_edges
 
 
-    @staticmethod
-    def edgeProcH( horizontal_cell_left, horizontal_cell_right):
+
+    def edgeProcH(self, horizontal_cell_left, horizontal_cell_right):
         if horizontal_cell_left.is_Root() and horizontal_cell_right.is_Root():
-            Cell.edgeProcH(horizontal_cell_left.cell3, horizontal_cell_right.cell2)
-            Cell.edgeProcH(horizontal_cell_left.cell1, horizontal_cell_right.cell0)
+            self.edgeProcH(horizontal_cell_left.cell3, horizontal_cell_right.cell2)
+            self.edgeProcH(horizontal_cell_left.cell1, horizontal_cell_right.cell0)
 
         elif horizontal_cell_left.is_Root() and horizontal_cell_right.is_Leaf():
-            Cell.edgeProcH(horizontal_cell_left.cell3, horizontal_cell_right)
-            Cell.edgeProcH(horizontal_cell_left.cell1, horizontal_cell_right)
+            self.edgeProcH(horizontal_cell_left.cell3, horizontal_cell_right)
+            self.edgeProcH(horizontal_cell_left.cell1, horizontal_cell_right)
 
         elif horizontal_cell_left.is_Leaf() and horizontal_cell_right.is_Root():
-            Cell.edgeProcH(horizontal_cell_left, horizontal_cell_right.cell2)
-            Cell.edgeProcH(horizontal_cell_left, horizontal_cell_right.cell0)
+            self.edgeProcH(horizontal_cell_left, horizontal_cell_right.cell2)
+            self.edgeProcH(horizontal_cell_left, horizontal_cell_right.cell0)
 
         elif  horizontal_cell_left.is_Leaf() and horizontal_cell_right.is_Leaf():
-            # self.add_dual_edge([horizontal_cell_left.get_dual_vertex().flatten().tolist(),
-                            # horizontal_cell_right.get_dual_vertex().flatten().tolist()]);
+            self.add_dual_edge([horizontal_cell_left.get_dual_vertex().flatten().tolist(),
+                                horizontal_cell_right.get_dual_vertex().flatten().tolist()]);
 
 
-            ax1.plot([horizontal_cell_left.get_dual_vertex().flatten().tolist()[0],
-                      horizontal_cell_right.get_dual_vertex().flatten().tolist()[0]], 
-                      [horizontal_cell_left.get_dual_vertex().flatten().tolist()[1], 
-                      horizontal_cell_right.get_dual_vertex().flatten().tolist()[1]], 'r')
-
-            print('Horizontall---')
-            print(np.array([horizontal_cell_left.get_dual_vertex().flatten().tolist(),
-                            horizontal_cell_right.get_dual_vertex().flatten().tolist()]))
-
+            # ax1.plot([horizontal_cell_left.get_dual_vertex().flatten().tolist()[0],
+            #           horizontal_cell_right.get_dual_vertex().flatten().tolist()[0]], 
+            #           [horizontal_cell_left.get_dual_vertex().flatten().tolist()[1], 
+            #           horizontal_cell_right.get_dual_vertex().flatten().tolist()[1]], 'r')
 
             # return np.array([horizontal_cell_left.get_dual_vertex().flatten().tolist(),
             #                 horizontal_cell_right.get_dual_vertex().flatten().tolist()])
@@ -612,39 +620,31 @@ class Cell:
         else:
             return None
 
-    @staticmethod
-    def edgeProcV( vertical_cell_top, vertical_cell_bottom):
+    def edgeProcV(self, vertical_cell_top, vertical_cell_bottom):
 
         global ax1
 
         if vertical_cell_top.is_Root() and vertical_cell_bottom.is_Root():
-            Cell.edgeProcV(vertical_cell_top.cell0, vertical_cell_bottom.cell2)
-            Cell.edgeProcV(vertical_cell_top.cell1, vertical_cell_bottom.cell3)
+            self.edgeProcV(vertical_cell_top.cell0, vertical_cell_bottom.cell2)
+            self.edgeProcV(vertical_cell_top.cell1, vertical_cell_bottom.cell3)
 
         elif vertical_cell_top.is_Root() and vertical_cell_bottom.is_Leaf():
-            Cell.edgeProcV(vertical_cell_top.cell0, vertical_cell_bottom)
-            Cell.edgeProcV(vertical_cell_top.cell1, vertical_cell_bottom)
+            self.edgeProcV(vertical_cell_top.cell0, vertical_cell_bottom)
+            self.edgeProcV(vertical_cell_top.cell1, vertical_cell_bottom)
 
         elif vertical_cell_top.is_Leaf() and vertical_cell_bottom.is_Root():
-            Cell.edgeProcV(vertical_cell_top, vertical_cell_bottom.cell2)
-            Cell.edgeProcV(vertical_cell_top, vertical_cell_bottom.cell3)
+            self.edgeProcV(vertical_cell_top, vertical_cell_bottom.cell2)
+            self.edgeProcV(vertical_cell_top, vertical_cell_bottom.cell3)
 
         elif vertical_cell_top.is_Leaf() and vertical_cell_bottom.is_Leaf():
-            # add_dual_edge([vertical_cell_top.get_dual_vertex().flatten().tolist(),
-                            # vertical_cell_bottom.get_dual_vertex().flatten().tolist()])
+            self.add_dual_edge([vertical_cell_top.get_dual_vertex().flatten().tolist(),
+                            vertical_cell_bottom.get_dual_vertex().flatten().tolist()])
 
-            print(vertical_cell_top.xmin_xmax_ymin_ymax())
-            print(vertical_cell_bottom.xmin_xmax_ymin_ymax())
-            ax1.plot([vertical_cell_top.get_dual_vertex().flatten().tolist()[0],
-                      vertical_cell_bottom.get_dual_vertex().flatten().tolist()[0]], 
-                      [vertical_cell_top.get_dual_vertex().flatten().tolist()[1], 
-                      vertical_cell_bottom.get_dual_vertex().flatten().tolist()[1]], 'r')
 
-            print('Vertical---')
-
-            print(np.array([vertical_cell_top.get_dual_vertex().flatten().tolist(),
-                          vertical_cell_bottom.get_dual_vertex().flatten().tolist()]))
-
+            # ax1.plot([vertical_cell_top.get_dual_vertex().flatten().tolist()[0],
+            #           vertical_cell_bottom.get_dual_vertex().flatten().tolist()[0]], 
+            #           [vertical_cell_top.get_dual_vertex().flatten().tolist()[1], 
+            #           vertical_cell_bottom.get_dual_vertex().flatten().tolist()[1]], 'r')
 
             # return np.array([vertical_cell_top.get_dual_vertex().flatten().tolist(),
             #                 vertical_cell_bottom.get_dual_vertex().flatten().tolist()])
@@ -664,11 +664,11 @@ class Cell:
             self.cell2.faceProc()
             self.cell3.faceProc()
 
-            Cell.edgeProcH(self.cell0, self.cell1)
-            Cell.edgeProcH(self.cell2, self.cell3)
+            self.edgeProcH(self.cell0, self.cell1)
+            self.edgeProcH(self.cell2, self.cell3)
 
-            Cell.edgeProcV(self.cell2, self.cell0)
-            Cell.edgeProcV(self.cell3, self.cell1)
+            self.edgeProcV(self.cell2, self.cell0)
+            self.edgeProcV(self.cell3, self.cell1)
 
         else:
             pass
@@ -853,53 +853,45 @@ def collapse(cell, implicit_object):
 
     if cell.is_Root():
         
-        if cell.cell0.is_NotInitialized():
-            raise ValueError('there should not be NotInitialized')
-        elif cell.cell0.is_Root():
+        if cell.cell0.is_Root():
             collapse(cell.cell0, implicit_object)
-        elif cell.cell0.cell_type in ['Full', 'Empty', 'Leaf']:
-            pass
         else:
-            raise ValueError
+            assert not cell.cell0.is_NotInitialized(), \
+                'please initialize type i.e. call eval_type() before collapse'
+            pass
         
-        if cell.cell1.is_NotInitialized():
-            raise ValueError('there should not be NotInitialized')
-        elif cell.cell1.is_Root():
+        if cell.cell1.is_Root():
             collapse(cell.cell1, implicit_object)
-        elif cell.cell1.cell_type in ['Full', 'Empty', 'Leaf']:
-            pass
         else:
-            raise ValueError
-            
-        if cell.cell2.is_NotInitialized():
-            raise ValueError('there should not be NotInitialized')
-        elif cell.cell2.is_Root():
+            assert not cell.cell1.is_NotInitialized(), \
+                'please initialize type i.e. call eval_type() before collapse'
+            pass
+
+        if cell.cell2.is_Root():
             collapse(cell.cell2, implicit_object)
-        elif cell.cell2.cell_type in ['Full', 'Empty', 'Leaf']:
-            pass
         else:
-            raise ValueError
+            assert not cell.cell2.is_NotInitialized(), \
+                'please initialize type i.e. call eval_type() before collapse'
+            pass
             
-        if cell.cell3.is_NotInitialized():
-            raise ValueError('there should not be NotInitialized')
-        elif cell.cell3.is_Root():
+        if cell.cell3.is_Root():
             collapse(cell.cell3, implicit_object)
-        elif cell.cell3.cell_type in ['Full', 'Empty', 'Leaf']:
-            pass
         else:
-            raise ValueError
-            
-        if ((cell.cell0.cell_type == 'Full') & 
-           (cell.cell1.cell_type == 'Full') &
-           (cell.cell2.cell_type == 'Full') &
-           (cell.cell3.cell_type == 'Full')) :
+            assert not cell.cell3.is_NotInitialized(), \
+                'please initialize type i.e. call eval_type() before collapse'
+            pass
+
+        if ((cell.cell0.is_Full()) & 
+           (cell.cell1.is_Full()) &
+           (cell.cell2.is_Full()) &
+           (cell.cell3.is_Full())) :
             
             cell.to_Full()
         
-        elif ((cell.cell0.cell_type == 'Empty') & 
-             (cell.cell1.cell_type == 'Empty') &
-             (cell.cell2.cell_type == 'Empty') &
-             (cell.cell3.cell_type == 'Empty')):
+        elif ((cell.cell0.is_Empty()) & 
+             (cell.cell1.is_Empty()) &
+             (cell.cell2.is_Empty()) &
+             (cell.cell3.is_Empty())):
             
             cell.to_Empty()
         
@@ -1118,7 +1110,7 @@ def main():
 
     hi = h.union(i)
 
-    # hi.visualize(0, 1, 0, 1, 100)
+    # hi.visualize_distance_field(0, 1, 0, 1)
 
     # import matplotlib.pyplot as plt
     # import matplotlib.patches as patches
@@ -1138,6 +1130,8 @@ def main():
     c.sampled_distance_fields(hi)
 
     # c.visualize(ax1)
+
+    c.check_not_initialized_exists()
     collapse(c, hi)
 
     c.visualize(ax1)
@@ -1158,9 +1152,6 @@ def main():
     c.get_all_dual_edge(dual_edges)
     print('len of dual_edges')
     # assert(len(dual_edges) > 0)
-
-    print(len(dual_edges))
-    print(dual_edges)
     # print('---edge---')
     # print(intersection_points) # weird format
 
@@ -1170,10 +1161,8 @@ def main():
 
     # lc = mc.LineCollection(edges, linewidths=2)
     for dual_edge in dual_edges:
-        print('----dual_edge')
-        print(dual_edge)
-        # lc = mc.LineCollection(dual_edge, linewidths=2)
-        # ax1.add_collection(lc)
+        lc = mc.LineCollection(dual_edge, linewidths=2, color='red')
+        ax1.add_collection(lc)
 
 
     for edge, intersect_point in zip(edges, intersection_points):
