@@ -1,8 +1,6 @@
-
-# coding: utf-8
-
-# In[1]:
-
+'''
+Based on https://www.mattkeeter.com/projects/contours/
+'''
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 fig1 = plt.figure()
@@ -143,6 +141,75 @@ class ImplicitRectangle(ImplicitObject):
         assert ymin!=ymax, "incorrect usage ymin == ymax"
         # right xmin ∩ left xmax ∩ upper ymin ∩ lower ymax
         self.implicit_lambda_function = (Right(xmin).intersect(Left(xmax)).intersect(Upper(ymin)).intersect(Lower(ymax))).implicit_lambda_function
+
+
+class ImplicitFailureStar(ImplicitObject):
+    # http://www.iquilezles.org/live/index.htm
+    def __init__(self, inner_radius, outer_radius, frequency, x0=0, y0=0):
+        self. implicit_lambda_function = \
+            lambda x, y:inner_radius + outer_radius*np.cos(np.arctan2(y,x)*frequency)
+
+class ImplicitStar(ImplicitObject):
+    # http://www.iquilezles.org/live/index.htm
+    def __init__(self, inner_radius, outer_radius, frequency, x0=0, y0=0):
+        print('here')
+        self. implicit_lambda_function = \
+            lambda x, y: ImplicitStar.smoothstep(
+                            inner_radius + outer_radius*np.cos(np.arctan2(y - x0, x - y0)*frequency), 
+                            inner_radius + outer_radius*np.cos(np.arctan2(y - x0, x - y0)*frequency) + 0.01,
+                            np.sqrt((x - x0)**2 + (y - y0)**2)
+                        )
+
+    @staticmethod
+    def smoothstep(edge0, edge1, x):
+        # https://en.wikipedia.org/wiki/Smoothstep
+        #     float smoothstep(float edge0, float edge1, float x)
+        # {
+        #     // Scale, bias and saturate x to 0..1 range
+        #     x = clamp((x - edge0)/(edge1 - edge0), 0.0, 1.0); 
+        #     // Evaluate polynomial
+        #     return x*x*(3 - 2*x);
+        # }
+
+        x = ImplicitStar.clamp((x - edge0)/(edge1 -edge0), 0.0, 1.0)
+        return x*x*(3-2*x)
+
+    @staticmethod
+    def clamp(x, _min, _max):
+        if x < _min:
+            return _min
+        elif x > _max:
+            return _max
+        else:
+            return x
+
+class ImplicitTree(ImplicitStar):
+    # http://www.iquilezles.org/live/index.htm
+    def __init__(self, inner_radius=0.2, outer_radius=0.1, frequency=10, x0=0.4, y0=0.5):
+
+        self.inner_radius = inner_radius
+        self.outer_radius = outer_radius
+        self.frequency = frequency
+        self.x0 = x0
+        self.y0 = y0
+
+        self. implicit_lambda_function = self.implicit_lambda_function
+
+
+    def implicit_lambda_function(self, x, y):
+
+        local_x = x - self.x0 
+        local_y = y - self.y0
+
+        r = self.inner_radius + self.outer_radius*np.cos(np.arctan2(local_y, local_x)*self.frequency + 20*local_x + 1)
+        result = ImplicitStar.smoothstep(r, r + 0.01,np.sqrt(local_x**2 + local_y**2))
+        r = 0.015
+        r += 0.002 * np.cos(120.0 * local_y)
+        r += np.exp(-20.0 * y)
+        result *= 1.0 - (1.0 - ImplicitStar.smoothstep(r, r + 0.002, abs(local_x+ 0.2*np.sin(2.0 *local_y)))) * \
+                              (1.0 - ImplicitStar.smoothstep(0.0, 0.1, local_y))
+        return result
+
 
 # In[19]:
 
@@ -469,7 +536,27 @@ class Cell:
                 edges.append([edge_vectice_0, edge_vectice_1])
 
             elif len(points_for_edges) == 6: # two edges
-                raise NotImplementedError
+
+                two_points_contain_vectice_0 = np.array(points_for_edges[0])
+                two_points_contain_vectice_1 = np.array(points_for_edges[1])
+
+                edge_vectice_0 = self.bisection(two_points_contain_vectice_0, implicit_object_instance)
+                edge_vectice_1 = self.bisection(two_points_contain_vectice_1, implicit_object_instance)
+
+                self.add_marching_cude_points(edge_vectice_0, edge_vectice_1)
+
+                edges.append([edge_vectice_0, edge_vectice_1])
+
+                two_points_contain_vectice_3 = np.array(points_for_edges[3])
+                two_points_contain_vectice_4 = np.array(points_for_edges[4])
+
+                edge_vectice_3 = self.bisection(two_points_contain_vectice_3, implicit_object_instance)
+                edge_vectice_4 = self.bisection(two_points_contain_vectice_4, implicit_object_instance)
+
+                self.add_marching_cude_points(edge_vectice_3, edge_vectice_4)
+
+                edges.append([edge_vectice_3, edge_vectice_4])
+
             else:
                 raise ValueError('there should not be another value...')
         
@@ -1110,7 +1197,10 @@ def main():
 
     hi = h.union(i)
 
-    # hi.visualize_distance_field(0, 1, 0, 1)
+    # hi = ImplicitStar(0.2, 0.1, 10, 0.5, 0.5)
+    # hi = ImplicitTree()
+
+    # hi.visualize_bitmap(0, 1, 0, 1, 500)
 
     # import matplotlib.pyplot as plt
     # import matplotlib.patches as patches
@@ -1118,7 +1208,6 @@ def main():
     # ax1 = fig1.add_subplot(111, aspect='equal')
     # ax1.set_xlim([-0.5, 1.5])
     # ax1.set_ylim([-0.5, 1.5])
-
 
     c = Cell(0, 1, 0, 1, 'NotInitialized')
     build_tree(c, 5)
@@ -1139,6 +1228,9 @@ def main():
     edges = []
     edges = c.marching_cube(hi, edges)
 
+    print('length of edges')
+    print(len(edges))
+
     intersection_points = []
     c.dual_contouring(hi, intersection_points)
     c.faceProc()
@@ -1151,6 +1243,7 @@ def main():
     dual_edges = []
     c.get_all_dual_edge(dual_edges)
     print('len of dual_edges')
+    print(len(dual_edges))
     # assert(len(dual_edges) > 0)
     # print('---edge---')
     # print(intersection_points) # weird format
@@ -1159,7 +1252,7 @@ def main():
     # import pylab as pl
     from matplotlib import collections  as mc
 
-    # lc = mc.LineCollection(edges, linewidths=2)
+    lc = mc.LineCollection(edges, linewidths=2)
     for dual_edge in dual_edges:
         lc = mc.LineCollection(dual_edge, linewidths=2, color='red')
         ax1.add_collection(lc)
@@ -1172,7 +1265,11 @@ def main():
         ax1.plot([intersect_point[0][0]], [intersect_point[1][0]], 'ro')
         ax1.plot([edges_mid_point_x], [edges_mid_point_y], 'go')
 
-        ax1.plot([edges_mid_point_x, intersect_point[0][0]], [edges_mid_point_y, intersect_point[1][0]], 'black')
+        # marching cube mid point to dual vertex..
+        ax1.plot([edges_mid_point_x, intersect_point[0][0]], [edges_mid_point_y, intersect_point[1][0]], 'yellow')
+
+        # marching cube
+        # ax1.plot([edge[0][0], edge[1][0]], [edge[0][1], edge[1][1]], 'green')
         # ax1.arrow(edges_mid_point_x, edges_mid_point_y, intersect_point[0][0], intersect_point[1][0], head_width=0.05, head_length=0.01, fc='k', ec='k')
 
 
@@ -1181,6 +1278,8 @@ def main():
     # ax.margins(0.1)
 
     plt.show()
+
+    
 
 
 if __name__ == '__main__':
