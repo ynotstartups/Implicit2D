@@ -1,24 +1,14 @@
 '''
 Based on https://www.mattkeeter.com/projects/contours/
 '''
+import numpy as np
+from util import *
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 fig1 = plt.figure()
 ax1 = fig1.add_subplot(111, aspect='equal')
-ax1.set_xlim([-0.5, 1.5])
-ax1.set_ylim([-0.5, 1.5])
-
-from mpl_toolkits.mplot3d import axes3d
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-
-# In[3]:
-
-# get_ipython().magic('matplotlib inline')
-
-
-# In[4]:
+ax1.set_xlim([-0, 1])
+ax1.set_ylim([-0, 1])
 
 class ImplicitObject:
     def __init__(self, implicit_lambda_function):
@@ -44,15 +34,65 @@ class ImplicitObject:
                                               ImplicitObjectInstance.eval_point(np.array([[x], [y]]))
                                               ))
     
+
+    # http://www.iquilezles.org/www/articles/smin/smin.htm
+    # exponential smooth min (k = 32);
+    # float smin( float a, float b, float k )
+    # {
+    #     float res = exp( -k*a ) + exp( -k*b );
+    #     return -log( res )/k;
+    # }
+
+    def exponential_smooth_union(self, ImplicitObjectInstance):
+        def smin(a, b, smooth_parameter = 32):
+            res = np.exp( -smooth_parameter*a ) + np.exp( -smooth_parameter*b );
+            return -np.log(res)/smooth_parameter
+
+        return ImplicitObject(lambda x, y: smin(
+                                              self.eval_point(np.array([[x], [y]])),
+                                              ImplicitObjectInstance.eval_point(np.array([[x], [y]]))
+                                              ))
+
+    # // polynomial smooth min (k = 0.1);
+    # float smin( float a, float b, float k )
+    # {
+    #     float h = clamp( 0.5+0.5*(b-a)/k, 0.0, 1.0 );
+    #     return mix( b, a, h ) - k*h*(1.0-h);
+    # }
+
+    def polynomial_smooth_union(self, ImplicitObjectInstance):
+
+        def smin(a, b, smooth_parameter = 0.1):
+            h = clamp(0.5+0.5*(b-a)/smooth_parameter, 0.0, 1.0 )
+            return mix( b, a, h ) - smooth_parameter*h*(1.0-h);
+
+        return ImplicitObject(lambda x, y: smin(
+                                              self.eval_point(np.array([[x], [y]])),
+                                              ImplicitObjectInstance.eval_point(np.array([[x], [y]]))
+                                              ))
+
+    
+    # // power smooth min (k = 8);
+    # doesn work
+    # float smin( float a, float b, float k )
+    # {
+    #     a = pow( a, k ); b = pow( b, k );
+    #     return pow( (a*b)/(a+b), 1.0/k );
+    # }
+
+
     def intersect(self, ImplicitObjectInstance):
         return ImplicitObject(lambda x, y: max(
                                               self.eval_point(np.array([[x], [y]])),
                                               ImplicitObjectInstance.eval_point(np.array([[x], [y]]))
                                               ))
-    
     def negate(self):
         return ImplicitObject(lambda x, y: -1 * self.eval_point(np.array([[x], [y]])))
     
+    def substraction(self, ImplicitObjectInstance):
+        # substraction ImplicitObjectInstance from self
+        return self.intersect(ImplicitObjectInstance.negate())
+
     def derivative_at_point(self, two_d_point, epsilon = 0.001):
 
         assert two_d_point.shape == (2, 1), 'wrong data two_d_point {}'.format(two_d_point)
@@ -64,7 +104,23 @@ class ImplicitObject:
 
         length = np.sqrt(dx**2 + dy**2)
 
-        return np.array([[dx / length],[dy / length]])
+        if length <= epsilon:
+            print('dodgy: probably error')
+            print(two_d_point)
+            print(dx)
+            print(dy)
+            print(self.eval_point(np.array([[x + epsilon], [y]])))
+            print(self.eval_point(np.array([[x - epsilon], [y]])))
+            print(self.eval_point(np.array([[x], [y + epsilon]])))
+            print(self.eval_point(np.array([[x], [y - epsilon]])) )
+            return np.array([[0],[0]])
+        else:        
+            assert length >= epsilon, \
+                'length {} if less than epislon {} check dx {} dy {} two_d_point {}'.format(
+                    length, epsilon, dx, dy, two_d_point
+                )
+
+            return np.array([[dx / length],[dy / length]])
 
     def visualize_bitmap(self, xmin, xmax, ymin, ymax, num_points=200):
         self.visualize(xmin, xmax, ymin, ymax, 'bitmap', num_points)
@@ -152,7 +208,6 @@ class ImplicitFailureStar(ImplicitObject):
 class ImplicitStar(ImplicitObject):
     # http://www.iquilezles.org/live/index.htm
     def __init__(self, inner_radius, outer_radius, frequency, x0=0, y0=0):
-        print('here')
         self. implicit_lambda_function = \
             lambda x, y: ImplicitStar.smoothstep(
                             inner_radius + outer_radius*np.cos(np.arctan2(y - x0, x - y0)*frequency), 
@@ -171,17 +226,8 @@ class ImplicitStar(ImplicitObject):
         #     return x*x*(3 - 2*x);
         # }
 
-        x = ImplicitStar.clamp((x - edge0)/(edge1 -edge0), 0.0, 1.0)
+        x = clamp((x - edge0)/(edge1 -edge0), 0.0, 1.0)
         return x*x*(3-2*x)
-
-    @staticmethod
-    def clamp(x, _min, _max):
-        if x < _min:
-            return _min
-        elif x > _max:
-            return _max
-        else:
-            return x
 
 class ImplicitTree(ImplicitStar):
     # http://www.iquilezles.org/live/index.htm
@@ -206,7 +252,7 @@ class ImplicitTree(ImplicitStar):
         r = 0.015
         r += 0.002 * np.cos(120.0 * local_y)
         r += np.exp(-20.0 * y)
-        result *= 1.0 - (1.0 - ImplicitStar.smoothstep(r, r + 0.002, abs(local_x+ 0.2*np.sin(2.0 *local_y)))) * \
+        result *= 1.0 - (1.0 - ImplicitStar.smoothstep(r, r + 1, abs(local_x+ 0.2*np.sin(2.0 *local_y)))) * \
                               (1.0 - ImplicitStar.smoothstep(0.0, 0.1, local_y))
         return result
 
@@ -349,11 +395,34 @@ class Cell:
         else:
             # print('to Leaf')
             self.cell_type = 'Leaf'
-            
-    def add_marching_cude_points(self, edge_vectice_0, edge_vectice_1):
+
+    def add_marching_cude_points(self, edge_vectice_0, edge_vectice_1, mc_connect_indicator):
         assert self.is_Leaf()
-        self.edge_vectice_0 = edge_vectice_0
-        self.edge_vectice_1 = edge_vectice_1
+        # self.edge_vectice_0 = edge_vectice_0
+        # self.edge_vectice_1 = edge_vectice_1
+        try:
+            self.edge_vectices.append((edge_vectice_0, edge_vectice_1, mc_connect_indicator))
+        except AttributeError:
+            self.edge_vectices = [(edge_vectice_0, edge_vectice_1, mc_connect_indicator)]
+
+    def get_first_indicator(self):
+        assert self.is_Leaf()
+        assert len(self.edge_vectices) >= 1
+        return self.edge_vectices[0][2]
+
+    def get_second_indicator(self):
+        assert self.is_Leaf()
+        assert len(self.edge_vectices) >= 1
+        print(self.edge_vectices[1])
+        print(self.edge_vectices[1][0])
+
+        print(self.edge_vectices[1][1])
+
+        return self.edge_vectices[1][2]
+
+    def get_marching_cude_points(self):
+        # remove the edges = 
+        raise NotImplementedError
 
     def debug_print(self, counter):
         counter += 1
@@ -367,6 +436,9 @@ class Cell:
             self.cell3.debug_print(counter)
     
     def visualize(self, ax1):
+
+
+
         if self.cell_type in ['Empty', 'Full', 'Leaf', 'NotInitialized']:
             if self.is_Empty():
                 color = 'grey'
@@ -482,29 +554,234 @@ class Cell:
         else:
             raise ValueError
 
+    @staticmethod
+    def mc_two_one_connect_h(two_vertice_first, two_type_first, two_vertice_second, two_type_second, 
+                             one_vertice, one_type):
+        # connect left to right two to one
+        assert 'left' in one_type, 'left not in one_type {}'.format(one_type)
+
+        if 'left' in one_type[0]:
+            if two_type_first == ['bottom', 'right']:
+                return np.array([two_vertice_first, one_vertice])
+            elif two_type_second == ['bottom', 'right']:
+                return np.array([two_vertice_second, one_vertice])
+            else:
+                raise ValueError('two_type_first {}, two_type_second {}'.format(two_type_first, two_type_second))
+        elif 'left' in one_type[1]:
+            if two_type_first == ['right', 'top']:
+                return np.array([two_vertice_first, one_vertice])
+            elif two_type_second == ['right', 'top']:
+                return np.array([two_vertice_second, one_vertice])
+            else:
+                raise ValueError('two_type_first {}, two_type_second {}'.format(two_type_first, two_type_second))
+        else:
+            raise ValueError
+
+    @staticmethod
+    def mc_one_two_connect_h(one_vertice, one_type, 
+                             two_vertice_first, two_type_first, two_vertice_second, two_type_second):
+        # connect left to right one to two
+        assert 'right' in one_type, 'right not in one_type {}'.format(one_type)
+        if 'right' in one_type[0]:
+            if two_type_first == ['top', 'left']:
+                return np.array([one_vertice, two_vertice_first])
+            elif two_type_second == ['top', 'left']:
+                return np.array([one_vertice, two_vertice_second])
+            else:
+                raise ValueError('two_type_first {}, two_type_second {}'.format(two_type_first, two_type_second))
+        elif 'right' in one_type[1]:
+            if two_type_first == ['left', 'bottom']:
+                return np.array([one_vertice, two_vertice_first])
+            elif two_type_second == ['left', 'bottom']:
+                return np.array([one_vertice, two_vertice_second])
+            else:
+                raise ValueError('two_type_first {}, two_type_second {}'.format(two_type_first, two_type_second))
+        else:
+            raise ValueError
+
+    @staticmethod
+    def mc_two_two_connect_h(two_vertice_l_first, two_type_l_first, two_vertice_l_second, two_type_l_second,
+                             two_vertice_r_first, two_type_r_first, two_vertice_r_second, two_type_r_second):
+        
+        # connect left to right two to two
+        ''' not tested '''
+
+        if two_type_l_first == ('top', 'left'):
+            assert two_type_l_second == ('bottom', 'right')
+
+            if two_type_r_first == ('bottom', 'left'):
+                return np.array([two_type_l_second, two_vertice_r_first])
+            elif two_type_r_second == ('bottom', 'left'):
+                return np.array([two_type_l_second, two_vertice_r_second])
+            else:
+                raise ValueError
+
+        elif two_type_l_first == ('bottom', 'right'):
+            assert two_type_l_second == ('top', 'left')
+            if two_type_r_first == ('bottom', 'left'):
+                return np.array([two_vertice_l_first, two_vertice_r_first])
+            elif two_type_r_second == ('bottom', 'left'):
+                return np.array([two_vertice_l_first, two_vertice_r_second])
+            else:
+                raise ValueError
+
+        elif two_type_l_first == ('left', 'bottom'):
+            assert two_type_l_second == ('right', 'top')
+
+            if two_type_r_first == ('top', 'left'):
+                return np.array([two_type_l_second, two_type_r_first])
+            elif two_type_r_second == ('top', 'left'):
+                return np.array([two_type_l_second, two_type_r_second])
+            else:
+                return ValueError
+
+        elif two_type_l_first == ('right', 'top'):
+            assert two_type_l_second == ('left', 'bottom')
+
+            if two_type_r_first == ('top', 'left'):
+                return np.array([two_type_l_first, two_type_r_first])
+            elif two_type_r_second == ('top', 'left'):
+                return np.array([two_type_l_first, two_type_r_second])
+            else:
+                return ValueError
+        else:
+            raise ValueError
+
+    @staticmethod
+    def mc_two_one_connect_v(two_vertice_first, two_type_first, two_vertice_second, two_type_second, 
+                             one_vertice, one_type):
+        # connect top to bottom two to one
+        assert 'top' in one_type, 'bottom not in one_type {}'.format(one_type)
+
+        if 'top' in one_type[0]: # TODO: why not == instead of in
+            if two_type_first == ['left', 'bottom']:
+                return np.array([two_vertice_first, one_vertice])
+            elif two_type_second == ['left', 'bottom']:
+                return np.array([two_type_second, one_vertice])
+            else:
+                raise ValueError
+
+        elif 'top' in one_type[1]:
+            if two_type_first == ['bottom', 'right']:
+                return np.array([two_vertice_first, one_vertice])
+            elif two_type_second == ['bottom', 'right']:
+                return np.array([two_type_second, one_vertice])
+            else:
+                raise ValueError
+
+        else:
+            raise ValueError
+
+    @staticmethod
+    def mc_one_two_connect_v(one_vertice, one_type, 
+                             two_vertice_first, two_type_first, two_vertice_second, two_type_second):
+        # connect top to bottom two to one
+        assert 'bottom' in one_type
+
+        if 'bottom' in one_type[0]: # TODO: why not == instead of in
+            if two_type_first == ['right', 'top']:
+                return np.array([one_vertice, two_vertice_first])
+            elif two_type_second == ['right', 'top']:
+                return np.array([one_vertice, two_vertice_second])
+            else:
+                raise ValueError
+
+        elif 'bottom' in one_type[1]:
+            if two_type_first == ['top', 'left']:
+                return np.array([one_vertice, two_vertice_first])
+            elif two_type_second == ['top', 'left']:
+                return np.array([one_vertice, two_vertice_second])
+            else:
+                raise ValueError
+
+        else:
+            raise ValueError
+
+    @staticmethod
+    def mc_two_two_connect_v(two_vertice_t_first, two_type_t_first, two_vertice_t_second, two_type_t_second,
+                             two_vertice_b_first, two_type_b_first, two_vertice_b_second, two_type_b_second):
+        
+        ''' not tested '''
+        if two_type_t_first == ['top', 'left']:
+            assert two_type_t_second == ['bottom', 'right']
+
+            if two_type_b_first == ['right', 'top']:
+                return np.array([two_type_t_second, two_type_b_first])
+            elif two_type_b_second == ['right', 'top']:
+                return np.array([two_type_t_second, two_type_b_second])
+            else:
+                raise ValueError
+
+        elif two_type_t_first == ['bottom', 'right']:
+            assert two_type_t_second == ['top', 'left']
+
+            if two_type_b_first == ['right', 'top']:
+                return np.array([two_type_t_first, two_type_b_first])
+            elif two_type_b_second == ['right', 'top']:
+                return np.array([two_type_t_first, two_type_b_second])
+            else:
+                raise ValueError
+
+        elif two_type_t_first == ['right', 'top']:
+            assert two_type_t_second == ['left', 'bottom']
+
+            if two_type_b_first == ['top', 'left']:
+                return np.array([two_type_t_second, two_type_b_first])
+            elif two_type_b_second == ['top', 'left']:
+                return np.array([two_type_t_second, two_type_b_second])
+            else:
+                raise ValueError
+        elif two_type_t_first == ['left', 'bottom']:
+            assert two_type_t_second == ['right', 'top']
+
+            if two_type_b_first == ['top', 'left']:
+                return np.array([two_type_t_first, two_type_b_first])
+            elif two_type_b_second == ['top', 'left']:
+                return np.array([two_type_t_first, two_type_b_second])
+            else:
+                raise ValueError
+
+        else:
+            raise ValueError
+
+
     def marching_cube(self, implicit_object_instance, edges):
         
+        def find_add_mc_edges_vertices(self, points_for_edges, edges):
+            two_points_contain_vectice_0 = np.array(points_for_edges[0])
+            two_points_contain_vectice_1 = np.array(points_for_edges[1])
+            mc_connect_indicator = np.array(points_for_edges[2])
+
+            edge_vectice_0 = self.bisection(two_points_contain_vectice_0, implicit_object_instance)
+            edge_vectice_1 = self.bisection(two_points_contain_vectice_1, implicit_object_instance)
+
+            self.add_marching_cude_points(edge_vectice_0, edge_vectice_1, mc_connect_indicator)
+
+            edges.append([edge_vectice_0, edge_vectice_1])
+
+            return [edge_vectice_0, edge_vectice_1]
+
         self.check_not_initialized_exists() # self testing
         
         # 0 to the left, 1 to the right
         marching_cube_edge_indicator = {
             (False, False, False, False): np.array([]),
-            (False, False, True, False): np.array([[self.point_0, self.point_2],[self.point_2, self.point_3], 0]),
-            (False, False, False, True): np.array([[self.point_1, self.point_3],[self.point_2, self.point_3], 1]),
-            (False, False, True, True): np.array([[self.point_0, self.point_2],[self.point_1, self.point_3], 0]),
-            (False, True, False, False): np.array([[self.point_0, self.point_1],[self.point_1, self.point_3], 1]),
-            (False, True, True, False): np.array([[self.point_0, self.point_1],[self.point_1, self.point_3], 0,
-                                                  [self.point_0, self.point_2],[self.point_2, self.point_3], 1]),
-            (False, True, False, True): np.array([[self.point_0, self.point_1], [self.point_2, self.point_3], 1]),
-            (False, True, True, True): np.array([[self.point_0, self.point_1], [self.point_0, self.point_2], 1]),
-            (True, False, False, False): np.array([[self.point_0, self.point_1], [self.point_0, self.point_2], 0]),
-            (True, False, True, False):  np.array([[self.point_0, self.point_1], [self.point_2, self.point_3], 0]),
-            (True, False, False, True): np.array([[self.point_0, self.point_1],[self.point_0, self.point_2], 0,
-                                                  [self.point_1, self.point_3],[self.point_2, self.point_3], 1]),
-            (True, False, True, True): np.array([[self.point_0, self.point_1],[self.point_1, self.point_3], 0]),
-            (True, True, False, False): np.array([[self.point_0, self.point_2],[self.point_1, self.point_3], 1]),
-            (True, True, True, False): np.array([[self.point_1, self.point_3],[self.point_2, self.point_3], 0]),
-            (True, True, False, True): np.array([[self.point_0, self.point_2],[self.point_2, self.point_3], 1]),
+            (False, False, True, False): np.array([[self.point_0, self.point_2],[self.point_2, self.point_3], [('top','left')]]),
+            (False, False, False, True): np.array([[self.point_1, self.point_3],[self.point_2, self.point_3], [('right','top')]]),
+            (False, False, True, True): np.array([[self.point_0, self.point_2],[self.point_1, self.point_3], [('right','left')]]),
+            (False, True, False, False): np.array([[self.point_0, self.point_1],[self.point_1, self.point_3], [('bottom','right')]]),
+            (False, True, True, False): np.array([[self.point_0, self.point_1],[self.point_1, self.point_3], [('bottom','right')],
+                                                  [self.point_0, self.point_2],[self.point_2, self.point_3], [('top','left')]]),
+            (False, True, False, True): np.array([[self.point_0, self.point_1], [self.point_2, self.point_3],  [('bottom','top')]]),
+            (False, True, True, True): np.array([[self.point_0, self.point_1], [self.point_0, self.point_2], [('bottom','left')]]),
+            (True, False, False, False): np.array([[self.point_0, self.point_1], [self.point_0, self.point_2], [('left','bottom')]]),
+            (True, False, True, False):  np.array([[self.point_0, self.point_1], [self.point_2, self.point_3], [('top','bottom')]]),
+            (True, False, False, True): np.array([[self.point_0, self.point_1],[self.point_0, self.point_2], [('left','bottom')],
+                                                  [self.point_1, self.point_3],[self.point_2, self.point_3], [('right','top')]]),
+            (True, False, True, True): np.array([[self.point_0, self.point_1],[self.point_1, self.point_3], [('right','bottom')]]),
+            (True, True, False, False): np.array([[self.point_0, self.point_2],[self.point_1, self.point_3], [('left','right')]]),
+            (True, True, True, False): np.array([[self.point_1, self.point_3],[self.point_2, self.point_3], [('top','right')]]),
+            (True, True, False, True): np.array([[self.point_0, self.point_2],[self.point_2, self.point_3], [('left', 'top')]]),
             (True, True, True, True):np.array([])
 
 
@@ -525,37 +802,48 @@ class Cell:
                 pass
             elif len(points_for_edges) == 3: # one edge
 
-                two_points_contain_vectice_0 = np.array(points_for_edges[0])
-                two_points_contain_vectice_1 = np.array(points_for_edges[1])
+                # two_points_contain_vectice_0 = np.array(points_for_edges[0])
+                # two_points_contain_vectice_1 = np.array(points_for_edges[1])
 
-                edge_vectice_0 = self.bisection(two_points_contain_vectice_0, implicit_object_instance)
-                edge_vectice_1 = self.bisection(two_points_contain_vectice_1, implicit_object_instance)
+                # edge_vectice_0 = self.bisection(two_points_contain_vectice_0, implicit_object_instance)
+                # edge_vectice_1 = self.bisection(two_points_contain_vectice_1, implicit_object_instance)
 
-                self.add_marching_cude_points(edge_vectice_0, edge_vectice_1)
+                # self.add_marching_cude_points(edge_vectice_0, edge_vectice_1)
 
-                edges.append([edge_vectice_0, edge_vectice_1])
+                # edges.append([edge_vectice_0, edge_vectice_1])
+                find_add_mc_edges_vertices(self, points_for_edges, edges)
 
             elif len(points_for_edges) == 6: # two edges
 
-                two_points_contain_vectice_0 = np.array(points_for_edges[0])
-                two_points_contain_vectice_1 = np.array(points_for_edges[1])
+                # two_points_contain_vectice_0 = np.array(points_for_edges[0])
+                # two_points_contain_vectice_1 = np.array(points_for_edges[1])
 
-                edge_vectice_0 = self.bisection(two_points_contain_vectice_0, implicit_object_instance)
-                edge_vectice_1 = self.bisection(two_points_contain_vectice_1, implicit_object_instance)
+                # edge_vectice_0 = self.bisection(two_points_contain_vectice_0, implicit_object_instance)
+                # edge_vectice_1 = self.bisection(two_points_contain_vectice_1, implicit_object_instance)
 
-                self.add_marching_cude_points(edge_vectice_0, edge_vectice_1)
+                # self.add_marching_cude_points(edge_vectice_0, edge_vectice_1)
+                # edges.append([edge_vectice_0, edge_vectice_1])
 
-                edges.append([edge_vectice_0, edge_vectice_1])
+                print('two edges--')
 
-                two_points_contain_vectice_3 = np.array(points_for_edges[3])
-                two_points_contain_vectice_4 = np.array(points_for_edges[4])
+                points_for_edge = points_for_edges[:3]
+                assert len(points_for_edge) == 3
+                res  = find_add_mc_edges_vertices(self, points_for_edge, edges)
+                print(res)
+                # two_points_contain_vectice_3 = np.array(points_for_edges[3])
+                # two_points_contain_vectice_4 = np.array(points_for_edges[4])
 
-                edge_vectice_3 = self.bisection(two_points_contain_vectice_3, implicit_object_instance)
-                edge_vectice_4 = self.bisection(two_points_contain_vectice_4, implicit_object_instance)
+                # edge_vectice_3 = self.bisection(two_points_contain_vectice_3, implicit_object_instance)
+                # edge_vectice_4 = self.bisection(two_points_contain_vectice_4, implicit_object_instance)
 
-                self.add_marching_cude_points(edge_vectice_3, edge_vectice_4)
+                # self.add_marching_cude_points(edge_vectice_3, edge_vectice_4)
 
-                edges.append([edge_vectice_3, edge_vectice_4])
+                # edges.append([edge_vectice_3, edge_vectice_4])
+
+                points_for_edge = points_for_edges[3:]
+                assert len(points_for_edge) == 3
+                res = find_add_mc_edges_vertices(self, points_for_edge, edges)
+                print(res)
 
             else:
                 raise ValueError('there should not be another value...')
@@ -666,6 +954,11 @@ class Cell:
         assert self.is_Root()
         try:
             self.dual_edges.append(dual_edge)
+            print(self.dual_edges)
+            if len(self.dual_edges) > 2:
+                print('len(self.dual_edges) is {}, large then 2'.format(len(self.dual_edges)))
+
+            # assert len(self.dual_edges) <= 2, 'len(self.dual_edges) is {}, large then 2'.format(len(self.dual_edges))
         except AttributeError:
             self.dual_edges = [dual_edge]
 
@@ -675,8 +968,6 @@ class Cell:
 
     def get_dual_edge(self):
         return self.dual_edges
-
-
 
     def edgeProcH(self, horizontal_cell_left, horizontal_cell_right):
         if horizontal_cell_left.is_Root() and horizontal_cell_right.is_Root():
@@ -692,17 +983,236 @@ class Cell:
             self.edgeProcH(horizontal_cell_left, horizontal_cell_right.cell0)
 
         elif  horizontal_cell_left.is_Leaf() and horizontal_cell_right.is_Leaf():
-            self.add_dual_edge([horizontal_cell_left.get_dual_vertex().flatten().tolist(),
-                                horizontal_cell_right.get_dual_vertex().flatten().tolist()]);
+
+            if horizontal_cell_left.num_dual_vertex() == 1 and \
+               horizontal_cell_right.num_dual_vertex() == 1:
+
+                if 'right' in horizontal_cell_left.get_first_indicator() and \
+                  'left' in horizontal_cell_right.get_first_indicator():
+                   self.add_dual_edge([horizontal_cell_left.get_first_dual_vertex().flatten().tolist(),
+                                        horizontal_cell_right.get_first_dual_vertex().flatten().tolist()]);
+                else:
+                    pass
+
+            elif horizontal_cell_left.num_dual_vertex() == 2 and \
+                 horizontal_cell_right.num_dual_vertex() == 1:
+                print('here h 2 1 ')
 
 
-            # ax1.plot([horizontal_cell_left.get_dual_vertex().flatten().tolist()[0],
-            #           horizontal_cell_right.get_dual_vertex().flatten().tolist()[0]], 
-            #           [horizontal_cell_left.get_dual_vertex().flatten().tolist()[1], 
-            #           horizontal_cell_right.get_dual_vertex().flatten().tolist()[1]], 'r')
+                left_first_d_v = horizontal_cell_left.get_first_dual_vertex().flatten().tolist()
+                left_second_d_v = horizontal_cell_left.get_second_dual_vertex().flatten().tolist()
+                left_first_indicator = horizontal_cell_left.get_first_indicator().flatten().tolist()
+                left_second_indicator = horizontal_cell_left.get_second_indicator().flatten().tolist()
+                right_d_v = horizontal_cell_right.get_first_dual_vertex().flatten().tolist()
+                right_indicator = horizontal_cell_right.get_first_indicator().flatten().tolist()
 
-            # return np.array([horizontal_cell_left.get_dual_vertex().flatten().tolist(),
-            #                 horizontal_cell_right.get_dual_vertex().flatten().tolist()])
+                result = self.mc_two_one_connect_h(left_first_d_v, left_first_indicator, left_second_d_v, left_second_indicator,
+                                            right_d_v, right_indicator)
+
+                if result is not None:
+                    assert result.shape == (2, 2)
+                    print('------here h 2 1  edge----')
+                    print(result.tolist())
+                    self.add_dual_edge(result.tolist());
+
+                '''
+                left_first_d_v = horizontal_cell_left.get_first_dual_vertex()
+                left_second_d_v = horizontal_cell_left.get_second_dual_vertex()
+                left_first_indicator = horizontal_cell_left.get_first_indicator()
+                left_second_indicator = horizontal_cell_left.get_second_indicator()
+
+                right_d_v = horizontal_cell_right.get_first_dual_vertex()
+                right_indicator = horizontal_cell_right.get_first_indicator()
+
+                assert 'left' in right_indicator 
+                assert not (('right' in left_first_indicator) and 'right' in left_second_indicator)
+
+                if not ('left' in right_indicator):
+                    # right cell is not connect to left
+                    return None
+                elif 'right' in left_first_indicator:
+                    self.add_dual_edge([left_first_d_v.flatten().tolist(),
+                                        right_d_v.flatten().tolist()]);
+                elif 'right' in left_second_indicator:
+                    self.add_dual_edge([left_second_d_v.flatten().tolist(),
+                                        right_d_v.flatten().tolist()]);
+                else:
+                    # no right in indicator, dont connect
+                    return None
+                    # raise ValueError('no right in indicator \
+                    #     left_first_indicator {}, left_second_indicator {}'.format(
+                    #     left_first_indicator, left_second_indicator
+                    #     )
+                    # )
+
+                '''
+
+                # if np.linalg.norm(left_first_d_v - right_d_v) <= np.linalg.norm(left_second_d_v - right_d_v):
+                #     self.add_dual_edge([left_first_d_v.flatten().tolist(),
+                #                         right_d_v.flatten().tolist()]);
+                # else:
+                #     self.add_dual_edge([left_second_d_v.flatten().tolist(),
+                #                         right_d_v.flatten().tolist()]);
+
+            elif horizontal_cell_left.num_dual_vertex() == 1 and \
+                 horizontal_cell_right.num_dual_vertex() == 2:
+
+                left_d_v = horizontal_cell_left.get_first_dual_vertex().flatten().tolist()
+                left_indicator = horizontal_cell_left.get_first_indicator().flatten().tolist()
+
+                right_first_d_v = horizontal_cell_right.get_first_dual_vertex().flatten().tolist()
+                right_first_indicator = horizontal_cell_right.get_first_indicator().flatten().tolist()
+
+                right_second_d_v = horizontal_cell_right.get_second_dual_vertex().flatten().tolist()
+                right_second_indicator = horizontal_cell_right.get_second_indicator().flatten().tolist()
+
+
+
+                result = self.mc_one_two_connect_h(left_d_v, left_indicator,
+                                                    right_first_d_v, right_first_indicator, right_second_d_v, right_second_indicator)
+                if result is not None:
+                    assert result.shape == (2, 2), 'result {}'.format(result)
+                    print('------here h 1 2  edge----')
+
+                    print(left_d_v)
+                    print(left_indicator)
+                    print(right_first_d_v)
+                    print(right_first_indicator)
+                    print(right_second_d_v)
+                    print(right_second_indicator)
+                    print(result.tolist())
+                    self.add_dual_edge(result.tolist());
+
+                '''
+                print('here h 1 2')
+
+                left_d_v = horizontal_cell_left.get_first_dual_vertex()
+                left_indicator = horizontal_cell_left.get_first_indicator()
+
+                right_first_d_v = horizontal_cell_right.get_first_dual_vertex()
+                right_second_d_v = horizontal_cell_right.get_second_dual_vertex()
+
+                right_first_indicator = horizontal_cell_right.get_first_indicator()
+                right_second_indicator = horizontal_cell_right.get_second_indicator()
+
+
+                print(left_d_v)
+                print(left_indicator)
+                print(right_first_d_v)
+                print(right_second_d_v)
+                print(right_first_indicator)
+                print(right_second_indicator)
+
+
+                if not ('right' in left_indicator):
+                    # left is not connect to right
+                    return None
+                elif 'left' in right_first_indicator:
+                    self.add_dual_edge([left_d_v.flatten().tolist(),
+                                        right_first_d_v.flatten().tolist()]);
+                elif 'left' in right_second_indicator:
+                    self.add_dual_edge([left_d_v.flatten().tolist(),
+                                        right_second_d_v.flatten().tolist()]);
+                else:
+                    return None
+                '''
+                # if np.linalg.norm(right_first_d_v - left_d_v) <= np.linalg.norm(right_second_d_v - left_d_v):
+                #     print('linked right_first_d_v')
+                #     self.add_dual_edge([left_d_v.flatten().tolist(),
+                #                         right_first_d_v.flatten().tolist()]);
+                # else:
+                #     print('linked right_second_d_v')
+                #     self.add_dual_edge([left_d_v.flatten().tolist(),
+                #                         right_second_d_v.flatten().tolist()]);
+
+                    
+            elif horizontal_cell_left.num_dual_vertex() == 2 and \
+                 horizontal_cell_right.num_dual_vertex() == 2:
+                print('here h 2 2 ')
+
+                raise ValueError('here h 2 2 ')
+                left_first_d_v = horizontal_cell_left.get_first_dual_vertex().flatten().tolist()
+                left_first_indicator = horizontal_cell_left.get_first_indicator().flatten().tolist()
+
+                left_second_d_v = horizontal_cell_left.get_second_dual_vertex().flatten().tolist()
+                left_second_indicator = horizontal_cell_left.get_second_indicator().flatten().tolist()
+
+                right_first_d_v = horizontal_cell_right.get_first_dual_vertex().flatten().tolist()
+                right_second_indicator = horizontal_cell_right.get_second_indicator().flatten().tolist()
+
+                right_second_d_v = horizontal_cell_right.get_second_dual_vertex().flatten().tolist()
+                right_first_indicator = horizontal_cell_right.get_first_indicator().flatten().tolist()
+
+                result = self.mc_two_two_connect_h(left_first_d_v, left_first_indicator, left_second_d_v, left_second_indicator, 
+                                                    right_first_d_v, right_first_indicator, right_second_d_v, right_second_indicator)
+                if result is not None:
+                    print('------here h 2 2  edge----')
+                    print(result.tolist())
+                    assert result.shape == (2, 2), 'result {}'.format(result)
+                    self.add_dual_edge(result.tolist());
+
+                '''
+                assert not (('right' in left_first_d_v) and ('right' in left_second_d_v))
+                assert not (('left' in right_first_d_v) and ('left' in right_second_d_v))
+
+                if 'right' in left_first_indicator:
+                    if 'left' in right_first_indicator:
+                        self.add_dual_edge([left_first_d_v.flatten().tolist(),
+                                            right_first_d_v.flatten().tolist()]);
+                    elif 'left' in right_second_indicator:
+                        self.add_dual_edge([left_first_d_v.flatten().tolist(),
+                                            right_second_d_v.flatten().tolist()]);
+                    else:
+                        raise ValueError('right connect to left, but right doesn"t connect to left ?')
+
+                elif 'right' in left_second_indicator:
+                    if 'left' in right_first_indicator:
+                        self.add_dual_edge([left_second_d_v.flatten().tolist(),
+                                            right_first_d_v.flatten().tolist()]);
+                    elif 'left' in right_second_indicator:
+                        self.add_dual_edge([left_second_d_v.flatten().tolist(),
+                                            right_second_d_v.flatten().tolist()]);
+                    else:
+                        raise ValueError('right connect to left, but right doesn"t connect to left ?')
+                else:
+                    # left not connect to right
+                    pass
+                '''
+                # norms = [norm(left_first_d_v - right_first_d_v),
+                #          norm(left_first_d_v - right_second_d_v),
+                #          norm(left_second_d_v - right_first_d_v),
+                #          norm(left_second_d_v - right_second_d_v)
+                #          ]
+
+                # min_index = np.argmin(norms)
+                # if min_index == 0:
+                #     self.add_dual_edge([left_first_d_v.flatten().tolist(),
+                #                         right_first_d_v.flatten().tolist()]);
+                # elif min_index == 1:
+                #     self.add_dual_edge([left_first_d_v.flatten().tolist(),
+                #                         right_second_d_v.flatten().tolist()]);
+                # elif min_index == 2:
+                #     self.add_dual_edge([left_second_d_v.flatten().tolist(),
+                #                         right_first_d_v.flatten().tolist()]);
+                # elif min_index == 3:
+                #     self.add_dual_edge([left_second_d_v.flatten().tolist(),
+                #                         right_second_d_v.flatten().tolist()]);
+                # else:
+                #     raise ValueError
+
+
+            else:
+                raise ValueError('horizontal_cell_left and horizontal_cell_right has unexpected dual vertex number, \
+                                 they are {}, {}'.format(horizontal_cell_left.num_dual_vertex(),
+                                                         horizontal_cell_right.num_dual_vertex()))
+
+            # ax1.plot([horizontal_cell_left.get_dual_vertexs().flatten().tolist()[0],
+            #           horizontal_cell_right.get_dual_vertexs().flatten().tolist()[0]], 
+            #           [horizontal_cell_left.get_dual_vertexs().flatten().tolist()[1], 
+            #           horizontal_cell_right.get_dual_vertexs().flatten().tolist()[1]], 'r')
+
+            # return np.array([horizontal_cell_left.get_dual_vertexs().flatten().tolist(),
+            #                 horizontal_cell_right.get_dual_vertexs().flatten().tolist()])
 
         else:
             return None
@@ -724,17 +1234,164 @@ class Cell:
             self.edgeProcV(vertical_cell_top, vertical_cell_bottom.cell3)
 
         elif vertical_cell_top.is_Leaf() and vertical_cell_bottom.is_Leaf():
-            self.add_dual_edge([vertical_cell_top.get_dual_vertex().flatten().tolist(),
-                            vertical_cell_bottom.get_dual_vertex().flatten().tolist()])
+            # self.add_dual_edge([vertical_cell_top.get_dual_vertexs()[0].flatten().tolist(),
+                            # vertical_cell_bottom.get_dual_vertexs()[0].flatten().tolist()])
 
 
-            # ax1.plot([vertical_cell_top.get_dual_vertex().flatten().tolist()[0],
-            #           vertical_cell_bottom.get_dual_vertex().flatten().tolist()[0]], 
-            #           [vertical_cell_top.get_dual_vertex().flatten().tolist()[1], 
-            #           vertical_cell_bottom.get_dual_vertex().flatten().tolist()[1]], 'r')
+            # ax1.plot([vertical_cell_top.get_dual_vertexs().flatten().tolist()[0],
+            #           vertical_cell_bottom.get_dual_vertexs().flatten().tolist()[0]], 
+            #           [vertical_cell_top.get_dual_vertexs().flatten().tolist()[1], 
+            #           vertical_cell_bottom.get_dual_vertexs().flatten().tolist()[1]], 'r')
 
-            # return np.array([vertical_cell_top.get_dual_vertex().flatten().tolist(),
-            #                 vertical_cell_bottom.get_dual_vertex().flatten().tolist()])
+            # return np.array([vertical_cell_top.get_dual_vertexs().flatten().tolist(),
+            #                 vertical_cell_bottom.get_dual_vertexs().flatten().tolist()])
+
+            if vertical_cell_top.num_dual_vertex() == 1 and \
+               vertical_cell_bottom.num_dual_vertex() == 1:
+                # self.add_dual_edge([vertical_cell_top.get_first_dual_vertex().flatten().tolist(),
+                #                     vertical_cell_bottom.get_first_dual_vertex().flatten().tolist()]);
+
+
+                if 'bottom' in vertical_cell_top.get_first_indicator() and \
+                  'top' in vertical_cell_bottom.get_first_indicator():
+                    self.add_dual_edge([vertical_cell_top.get_first_dual_vertex().flatten().tolist(),
+                                        vertical_cell_bottom.get_first_dual_vertex().flatten().tolist()]);
+                else:
+                    pass
+
+            elif vertical_cell_top.num_dual_vertex() == 2 and \
+                 vertical_cell_bottom.num_dual_vertex() == 1:
+                print('here v 2 1 ')
+
+                top_first_d_v = vertical_cell_top.get_first_dual_vertex().flatten().tolist()
+                two_first_indicator = vertical_cell_top.get_first_indicator().flatten().tolist()
+
+                top_second_d_v = vertical_cell_top.get_second_dual_vertex().flatten().tolist()
+                two_second_indicator = vertical_cell_top.get_second_indicator().flatten().tolist()
+
+                bottom_d_v = vertical_cell_bottom.get_first_dual_vertex().flatten().tolist()
+                bottom_indicator = vertical_cell_bottom.get_first_indicator().flatten().tolist()
+
+                result = self.mc_two_one_connect_v(top_first_d_v, two_first_indicator, top_second_d_v, two_second_indicator, 
+                                                    bottom_d_v, bottom_indicator)
+
+                if result is not None:
+                    assert result.shape == (2, 2), 'result {}'.format(result)
+                    self.add_dual_edge(result.tolist());
+
+                '''
+                print(top_first_d_v)
+                print(top_second_d_v)
+                print(bottom_d_v)
+
+                if np.linalg.norm(top_first_d_v - bottom_d_v) <= np.linalg.norm(top_second_d_v - bottom_d_v):
+                    print('linked top_first_d_v')
+
+                    self.add_dual_edge([top_first_d_v.flatten().tolist(),
+                                        bottom_d_v.flatten().tolist()]);
+                else:
+                    print('linked top_second_d_v')
+                    self.add_dual_edge([top_second_d_v.flatten().tolist(),
+                                        bottom_d_v.flatten().tolist()]);
+                '''
+            elif vertical_cell_top.num_dual_vertex() == 1 and \
+                 vertical_cell_bottom.num_dual_vertex() == 2:
+
+                top_d_v = vertical_cell_top.get_first_dual_vertex().flatten().tolist()
+                top_indicator = vertical_cell_top.get_first_indicator().flatten().tolist()
+
+                bottom_first_d_v = vertical_cell_bottom.get_first_dual_vertex().flatten().tolist()
+                bottom_first_indicator = vertical_cell_bottom.get_first_indicator().flatten().tolist()
+
+                bottom_second_d_v = vertical_cell_bottom.get_second_dual_vertex().flatten().tolist()
+                bottom_second_indicator = vertical_cell_bottom.get_second_indicator().flatten().tolist()
+
+                result = self.mc_one_two_connect_v(top_d_v, top_indicator, 
+                                                    bottom_first_d_v, bottom_first_indicator, bottom_second_d_v, bottom_second_indicator)
+
+                if result is not None:
+                    assert result.shape == (2, 2), 'result {}'.format(result)
+                    self.add_dual_edge(result.tolist());
+
+
+                '''
+                print('here v 1 2')
+                top_d_v = vertical_cell_top.get_first_dual_vertex()
+                bottom_first_d_v = vertical_cell_bottom.get_first_dual_vertex()
+                bottom_second_d_v = vertical_cell_bottom.get_second_dual_vertex()
+
+                print(top_d_v)
+                print(bottom_first_d_v)
+                print(bottom_second_d_v)
+
+                if np.linalg.norm(bottom_first_d_v - top_d_v) <= np.linalg.norm(bottom_second_d_v - top_d_v):
+                    print('linked bottom_first_d_v')
+                    self.add_dual_edge([top_d_v.flatten().tolist(),
+                                        bottom_first_d_v.flatten().tolist()]);
+                else:
+                    print('linked bottom_second_d_v')
+                    self.add_dual_edge([top_d_v.flatten().tolist(),
+                                        bottom_second_d_v.flatten().tolist()]);
+                '''
+                    
+            elif vertical_cell_top.num_dual_vertex() == 2 and \
+                 vertical_cell_bottom.num_dual_vertex() == 2:
+
+                raise ValueError('here v 2 2')
+
+
+                top_first_d_v = vertical_cell_top.get_first_dual_vertex().flatten().tolist()
+                two_first_indicator = vertical_cell_top.get_first_indicator().flatten().tolist()
+
+                top_second_d_v = vertical_cell_top.get_second_dual_vertex().flatten().tolist()
+                two_second_indicator = vertical_cell_top.get_second_indicator().flatten().tolist()
+
+                bottom_first_d_v = vertical_cell_bottom.get_first_dual_vertex().flatten().tolist()
+                bottom_first_indicator = vertical_cell_bottom.get_first_indicator().flatten().tolist()
+
+                bottom_second_d_v = vertical_cell_bottom.get_second_dual_vertex().flatten().tolist()
+                bottom_second_indicator = vertical_cell_bottom.get_second_indicator().flatten().tolist()
+
+                result = self.mc_two_two_connect_v(top_first_d_v, two_first_indicator, top_second_d_v, two_second_indicator, 
+                                                    bottom_first_d_v, bottom_first_indicator, bottom_second_d_v, bottom_second_indicator)
+
+
+
+                if result is not None:
+                    assert result.shape == (2, 2), 'result {}'.format(result)
+                    self.add_dual_edge(result.tolist());
+
+                '''
+                print('here v 2 2 ')
+
+                top_first_d_v = vertical_cell_top.get_first_dual_vertex()
+                top_second_d_v = vertical_cell_top.get_second_dual_vertex()
+
+                bottom_first_d_v = vertical_cell_bottom.get_first_dual_vertex()
+                bottom_second_d_v = vertical_cell_bottom.get_second_dual_vertex()
+
+                norms = [norm(top_first_d_v - bottom_first_d_v),
+                         norm(top_first_d_v - bottom_first_d_v),
+                         norm(top_second_d_v - bottom_first_d_v),
+                         norm(top_second_d_v - bottom_second_d_v)
+                         ]
+
+                min_index = np.argmin(norms)
+                if min_index == 0:
+                    self.add_dual_edge([top_first_d_v.flatten().tolist(),
+                                        bottom_first_d_v.flatten().tolist()]);
+                elif min_index == 1:
+                    self.add_dual_edge([top_first_d_v.flatten().tolist(),
+                                        bottom_first_d_v.flatten().tolist()]);
+                elif min_index == 2:
+                    self.add_dual_edge([top_second_d_v.flatten().tolist(),
+                                        bottom_first_d_v.flatten().tolist()]);
+                elif min_index == 3:
+                    self.add_dual_edge([top_second_d_v.flatten().tolist(),
+                                        bottom_second_d_v.flatten().tolist()]);
+                else:
+                    raise ValueError
+                '''
 
         else:
             return None
@@ -761,17 +1418,34 @@ class Cell:
             pass
 
     def add_dual_vertex(self, dual_vertex):
+        # can be more than one in a Leaf
         assert self.is_Leaf()
         assert not hasattr(self, 'dual_vertex')
-        self.dual_vertex = dual_vertex
+        try:
+            self.dual_vertexs.append(dual_vertex)
+        except AttributeError:
+            self.dual_vertexs = [dual_vertex]
 
-    def get_dual_vertex(self):
+    def get_first_dual_vertex(self):
+        return self.get_dual_vertexs()[0]
+
+    def get_second_dual_vertex(self):
+        assert self.num_dual_vertex() == 2
+        return self.get_dual_vertexs()[1]
+
+    def get_dual_vertexs(self):
         assert self.is_Leaf()
-        return self.dual_vertex
+        assert len(self.dual_vertexs) <= 2
+        return self.dual_vertexs
+
+    def num_dual_vertex(self):
+        assert self.is_Leaf()
+        return len(self.get_dual_vertexs())
 
     def get_all_dual_vertex(self, list_to_add):
         if self.is_Leaf():
-            list_to_add.append(self.dual_vertex)
+            for each_dual_vertex in self.get_dual_vertexs():
+                list_to_add.append(each_dual_vertex)
         elif self.is_Root():
             self.cell0.get_all_dual_vertex(list_to_add)
             self.cell1.get_all_dual_vertex(list_to_add)
@@ -779,6 +1453,17 @@ class Cell:
             self.cell3.get_all_dual_vertex(list_to_add)
         else:
             pass
+
+    def is_point_in_cell(self, two_d_point):
+        x = two_d_point[0][0]
+        y = two_d_point[1][0]
+
+        if (self.xmin <= x) and (x <= self.xmax) and \
+            (self.ymin <= y) and (y <= self.ymax):
+            return True
+        else:
+            return False
+
 
     def dual_contouring(self, implicit_object_instance, intersection_points):
 
@@ -829,37 +1514,65 @@ class Cell:
 
         elif self.is_Leaf():
 
-            point_0_x = self.edge_vectice_0[0]
-            point_0_y = self.edge_vectice_0[1]
+            for each_pair_edge in self.edge_vectices:
+                point_0_x = each_pair_edge[0][0]
+                point_0_y = each_pair_edge[0][1]
 
-            point_1_x = self.edge_vectice_1[0]
-            point_1_y = self.edge_vectice_1[1]
+                point_1_x = each_pair_edge[1][0]
+                point_1_y = each_pair_edge[1][1]
 
 
-            point_0_derivative = implicit_object_instance.derivative_at_point(np.array([[point_0_x], [point_0_y]]))
-            point_1_derivative = implicit_object_instance.derivative_at_point(np.array([[point_1_x], [point_1_y]]))
+                point_0_derivative = implicit_object_instance.derivative_at_point(np.array([[point_0_x], [point_0_y]]))
+                point_1_derivative = implicit_object_instance.derivative_at_point(np.array([[point_1_x], [point_1_y]]))
 
-            point_0_dx = point_0_derivative[0][0]
-            point_0_dy = point_0_derivative[1][0]
+                print('answer of two dot product')
+                print(point_0_derivative/np.linalg.norm(point_0_derivative.T))
+                print(point_0_derivative/np.linalg.norm(point_1_derivative))
+                cos_theta = np.dot(point_0_derivative.T/np.linalg.norm(point_0_derivative.T),
+                                   point_1_derivative/np.linalg.norm(point_1_derivative))
 
-            rotated_point_0_dx = -1 * point_0_dy
-            rotated_point_0_dy = point_0_dx
+                print(cos_theta)
 
-            point_1_dx = point_1_derivative[0][0]
-            point_1_dy = point_1_derivative[1][0]
 
-            rotated_point_1_dx = -1 * point_1_dy
-            rotated_point_1_dy = point_1_dx
+                if cos_theta >= 0.9:
+                    print('no sharp edge, return mid point, dodgy')
+                    self.add_dual_vertex(np.array([[point_0_x/2 + point_1_x/2], [point_1_y/2 + point_1_y/2]]))
+                    continue
+                else:
+                    point_0_dx = point_0_derivative[0][0]
+                    point_0_dy = point_0_derivative[1][0]
 
-            intersection_point = intersection_of_two_paramatric_line(
-                rotated_point_0_dx, rotated_point_0_dy, point_0_x, point_0_y,
-                rotated_point_1_dx, rotated_point_1_dy, point_1_x, point_1_y)
+                    rotated_point_0_dx = -1 * point_0_dy
+                    rotated_point_0_dy = point_0_dx
 
-            self.add_dual_vertex(intersection_point)
+                    point_1_dx = point_1_derivative[0][0]
+                    point_1_dy = point_1_derivative[1][0]
 
-            intersection_points.append(intersection_point)
+                    rotated_point_1_dx = -1 * point_1_dy
+                    rotated_point_1_dy = point_1_dx
 
-            return intersection_points
+                    intersection_point = intersection_of_two_paramatric_line(
+                        rotated_point_0_dx, rotated_point_0_dy, point_0_x, point_0_y,
+                        rotated_point_1_dx, rotated_point_1_dy, point_1_x, point_1_y)
+
+
+                    # self.add_dual_vertex(intersection_point)
+
+                    # assert self.is_point_in_cell(intersection_point), \
+                    #     'dual vertex {} not in Cell {}'.format(intersection_point, self.xmin_xmax_ymin_ymax())
+
+                    
+                    if self.is_point_in_cell(intersection_point):
+                        self.add_dual_vertex(intersection_point)
+                        intersection_points.append(intersection_point)
+                    elif not self.is_point_in_cell(intersection_point):
+                        print('dodgy not in cell return origin value')
+                        self.add_dual_vertex(np.array([[point_0_x/2 + point_1_x/2], [point_1_y/2 + point_1_y/2]]))
+                        intersection_points.append(np.array([[point_0_x/2 + point_1_x/2], [point_1_y/2 + point_1_y/2]]))
+
+                    else:
+                        raise ValueError
+                    
 
         else:
             pass
@@ -884,22 +1597,22 @@ class Cell:
             pass
 
 
-    def get_all_dual_vertice(self, vertices):
+    # def get_all_dual_vertice(self, vertices):
 
-        assert isinstance(edges, list)
+    #     assert isinstance(edges, list)
 
-        if self.is_Root():
-            if self.has_dual_edge():
-                edges.append(self.get_dual_edge())
-            else:
-                pass
+    #     if self.is_Root():
+    #         if self.has_dual_edge():
+    #             edges.append(self.get_dual_edge())
+    #         else:
+    #             pass
 
-            self.cell0.get_all_dual_edge(edges)
-            self.cell1.get_all_dual_edge(edges)
-            self.cell2.get_all_dual_edge(edges)
-            self.cell3.get_all_dual_edge(edges)
-        else:
-            pass
+    #         self.cell0.get_all_dual_edge(edges)
+    #         self.cell1.get_all_dual_edge(edges)
+    #         self.cell2.get_all_dual_edge(edges)
+    #         self.cell3.get_all_dual_edge(edges)
+    #     else:
+    #         pass
 
 
 
@@ -1189,6 +1902,12 @@ def derivative_test():
 # In[162]:
 def main():
 
+    from mpl_toolkits.mplot3d import axes3d
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+
+
     h = ImplicitRectangle(0.1, 0.25, 0.1, 0.9).union(ImplicitRectangle(0.1, 0.6, 0.1, 0.35)).union(ImplicitCircle(0.35, 0.35, 0.25)).intersect(
             (ImplicitCircle(0.35, 0.35, 0.1).union(ImplicitRectangle(0.25, 0.45, 0.1, 0.35))).negate()
         )
@@ -1197,10 +1916,11 @@ def main():
 
     hi = h.union(i)
 
-    # hi = ImplicitStar(0.2, 0.1, 10, 0.5, 0.5)
+    hi = ImplicitStar(0.2, 0.1, 10, 0.5, 0.5)
     # hi = ImplicitTree()
 
     # hi.visualize_bitmap(0, 1, 0, 1, 500)
+    # hi.visualize_distance_field(0, 1, 0, 1, 500)
 
     # import matplotlib.pyplot as plt
     # import matplotlib.patches as patches
@@ -1230,13 +1950,14 @@ def main():
 
     print('length of edges')
     print(len(edges))
+    print(edges)
 
     intersection_points = []
     c.dual_contouring(hi, intersection_points)
     c.faceProc()
 
 
-    intersection_points = []
+    intersection_points = [] 
     c.get_all_dual_vertex(intersection_points)
 
 
@@ -1244,7 +1965,7 @@ def main():
     c.get_all_dual_edge(dual_edges)
     print('len of dual_edges')
     print(len(dual_edges))
-    # assert(len(dual_edges) > 0)
+    assert(len(dual_edges) > 0)
     # print('---edge---')
     # print(intersection_points) # weird format
 
@@ -1262,15 +1983,19 @@ def main():
         edges_mid_point_x = (edge[0][0] + edge[1][0])/2
         edges_mid_point_y = (edge[0][1] + edge[1][1])/2
 
-        ax1.plot([intersect_point[0][0]], [intersect_point[1][0]], 'ro')
-        ax1.plot([edges_mid_point_x], [edges_mid_point_y], 'go')
+        # ax1.plot([intersect_point[0][0]], [intersect_point[1][0]], 'ro')
+        # marching cube mid point
+        # ax1.plot([edges_mid_point_x], [edges_mid_point_y], 'go')
+
 
         # marching cube mid point to dual vertex..
-        ax1.plot([edges_mid_point_x, intersect_point[0][0]], [edges_mid_point_y, intersect_point[1][0]], 'yellow')
+        # ax1.plot([edges_mid_point_x, intersect_point[0][0]], [edges_mid_point_y, intersect_point[1][0]], 'yellow')
+
 
         # marching cube
+        # ax1.plot([edge[0][0]], [edge[0][1]], 'go')
+        # ax1.plot([edge[1][0]], [edge[1][1]], 'go')
         # ax1.plot([edge[0][0], edge[1][0]], [edge[0][1], edge[1][1]], 'green')
-        # ax1.arrow(edges_mid_point_x, edges_mid_point_y, intersect_point[0][0], intersect_point[1][0], head_width=0.05, head_length=0.01, fc='k', ec='k')
 
 
 
@@ -1279,8 +2004,30 @@ def main():
 
     plt.show()
 
+def smooth_union_demo():
+    import numpy as np
+    import matplotlib.pyplot as plt    
+
+    rect_0 = ImplicitRectangle(0.2, 0.6, 0.2, 0.6)
+
+    rect_1 = ImplicitRectangle(0.4, 0.8, 0.4, 0.8)
     
+    # rect_new = rect_0.polynomial_smooth_union(rect_1)
+    # # rect_new.visualize_distance_field(0, 1, 0, 1)
+    # rect_new.visualize_bitmap(0, 1, 0, 1)
+
+    # rect_new = rect_0.union(rect_1)
+    # rect_new.visualize_bitmap(0, 1, 0, 1)
+
+    # rect_new = rect_0.exponential_smooth_union(rect_1)
+    # rect_new.visualize_distance_field(0, 1, 0, 1)
+
+    rect_new = rect_0.power_smooth_union(rect_1)
+    rect_new.visualize_bitmap(0, 1, 0, 1)
+    plt.show()
 
 
 if __name__ == '__main__':
-    main()
+    smooth_union_demo()
+
+    # main()
