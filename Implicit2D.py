@@ -1,5 +1,6 @@
 '''
 Based on https://www.mattkeeter.com/projects/contours/
+and http://www.iquilezles.org/
 '''
 import numpy as np
 from util import *
@@ -33,7 +34,21 @@ class ImplicitObject:
                                               self.eval_point(np.array([[x], [y]])),
                                               ImplicitObjectInstance.eval_point(np.array([[x], [y]]))
                                               ))
+
+    def intersect(self, ImplicitObjectInstance):
+        return ImplicitObject(lambda x, y: max(
+                                              self.eval_point(np.array([[x], [y]])),
+                                              ImplicitObjectInstance.eval_point(np.array([[x], [y]]))
+                                              ))
+    def negate(self):
+        return ImplicitObject(lambda x, y: -1 * self.eval_point(np.array([[x], [y]])))
     
+    def substraction(self, ImplicitObjectInstance):
+        # substraction ImplicitObjectInstance from self
+        return self.intersect(ImplicitObjectInstance.negate())
+
+
+# distance deformations
 
     # http://www.iquilezles.org/www/articles/smin/smin.htm
     # exponential smooth min (k = 32);
@@ -43,6 +58,16 @@ class ImplicitObject:
     #     return -log( res )/k;
     # }
 
+    # http://www.iquilezles.org/www/articles/smin/smin.htm
+    # You must be carefull when using distance transformation functions, 
+    # as the field created might not be a real distance function anymore. 
+    # You will probably need to decrease your step size, 
+    # if you are using a raymarcher to sample this.
+    # The displacement example below is using sin(20*p.x)*sin(20*p.y)*sin(20*p.z) as displacement pattern,
+    # but you can of course use anything you might imagine. 
+    # As for smin() function in opBlend(), please read the smooth minimum article in this same site. 
+
+ 
     def exponential_smooth_union(self, ImplicitObjectInstance):
         def smin(a, b, smooth_parameter = 32):
             res = np.exp( -smooth_parameter*a ) + np.exp( -smooth_parameter*b );
@@ -71,27 +96,52 @@ class ImplicitObject:
                                               ImplicitObjectInstance.eval_point(np.array([[x], [y]]))
                                               ))
 
+    # cannot make it work
     
     # // power smooth min (k = 8);
-    # doesn work
     # float smin( float a, float b, float k )
     # {
     #     a = pow( a, k ); b = pow( b, k );
     #     return pow( (a*b)/(a+b), 1.0/k );
     # }
 
+    # def power_smooth_union(self, ImplicitObjectInstance):
+    #     def smin(a, b, smooth_parameter=3):
+    #         print("---------------------")
+    #         print(type(a))
+    #         print(type(b))
+    #         a = pow( a, smooth_parameter )
+    #         b = pow( b, smooth_parameter )
 
-    def intersect(self, ImplicitObjectInstance):
-        return ImplicitObject(lambda x, y: max(
-                                              self.eval_point(np.array([[x], [y]])),
-                                              ImplicitObjectInstance.eval_point(np.array([[x], [y]]))
-                                              ))
-    def negate(self):
-        return ImplicitObject(lambda x, y: -1 * self.eval_point(np.array([[x], [y]])))
+    #         return np.log(a +)
+    #         # print(pow( (a*b)/(a+b), 1.0/smooth_parameter ))
+
+    #         # return pow( (a*b)/(a+b), 1.0/smooth_parameter )
+
+    #     return ImplicitObject(lambda x, y: smin(
+    #                                           self.eval_point(np.array([[x], [y]])),
+    #                                           ImplicitObjectInstance.eval_point(np.array([[x], [y]]))
+    #                                           ))
+
     
-    def substraction(self, ImplicitObjectInstance):
-        # substraction ImplicitObjectInstance from self
-        return self.intersect(ImplicitObjectInstance.negate())
+    # distance deformations
+
+    # float opDisplace( vec3 p )
+    #     {
+    #         float d1 = primitive(p);
+    #         float d2 = displacement(p);
+    #         return d1+d2;
+    #     }
+
+    def displace(self, frequency, scale):
+        def displacement(x, y, frequency, scale):
+            return self.eval_point(np.array([[x], [y]])) + (np.sin(frequency*x)*np.sin(frequency*y))/scale
+
+        return ImplicitObject(lambda x, y: displacement(x, y, frequency, scale))
+
+
+    # domain deformations
+
 
     def derivative_at_point(self, two_d_point, epsilon = 0.001):
 
@@ -1527,14 +1577,14 @@ class Cell:
 
                 print('answer of two dot product')
                 print(point_0_derivative/np.linalg.norm(point_0_derivative.T))
-                print(point_0_derivative/np.linalg.norm(point_1_derivative))
+                print(point_1_derivative/np.linalg.norm(point_1_derivative))
                 cos_theta = np.dot(point_0_derivative.T/np.linalg.norm(point_0_derivative.T),
                                    point_1_derivative/np.linalg.norm(point_1_derivative))
 
                 print(cos_theta)
 
 
-                if cos_theta >= 0.9:
+                if abs(cos_theta) >= 0.9:
                     print('no sharp edge, return mid point, dodgy')
                     self.add_dual_vertex(np.array([[point_0_x/2 + point_1_x/2], [point_1_y/2 + point_1_y/2]]))
                     continue
@@ -1916,8 +1966,14 @@ def main():
 
     hi = h.union(i)
 
-    hi = ImplicitStar(0.2, 0.1, 10, 0.5, 0.5)
+
+    # hi = ImplicitStar(0.2, 0.1, 10, 0.5, 0.5)
     # hi = ImplicitTree()
+
+
+    rect_0 = ImplicitRectangle(0.2, 0.6, 0.2, 0.6)
+    hi = rect_0.displace(200, 10)
+
 
     # hi.visualize_bitmap(0, 1, 0, 1, 500)
     # hi.visualize_distance_field(0, 1, 0, 1, 500)
@@ -1930,7 +1986,7 @@ def main():
     # ax1.set_ylim([-0.5, 1.5])
 
     c = Cell(0, 1, 0, 1, 'NotInitialized')
-    build_tree(c, 5)
+    build_tree(c, 7)
     c.initialise_cell_type(hi)
     # c.visualize(ax1)
     c.print_type()
@@ -2022,12 +2078,12 @@ def smooth_union_demo():
     # rect_new = rect_0.exponential_smooth_union(rect_1)
     # rect_new.visualize_distance_field(0, 1, 0, 1)
 
-    rect_new = rect_0.power_smooth_union(rect_1)
+    rect_new = rect_0.displace(200, 10)
     rect_new.visualize_bitmap(0, 1, 0, 1)
     plt.show()
 
 
 if __name__ == '__main__':
-    smooth_union_demo()
+    # smooth_union_demo()
 
-    # main()
+    main()
