@@ -8,8 +8,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 fig1 = plt.figure()
 ax1 = fig1.add_subplot(111, aspect='equal')
-ax1.set_xlim([-0, 1])
-ax1.set_ylim([-0, 1])
+ax1.set_xlim([0, 1])
+ax1.set_ylim([0, 1])
 
 class ImplicitObject:
     def __init__(self, implicit_lambda_function):
@@ -930,7 +930,8 @@ class Cell:
 
     def sampled_distance_fields(self, implicit_object_instance, epsilon = 0.001):
 
-        assert isinstance(implicit_object_instance, ImplicitObject)
+        # assert issubclass(implicit_object_instance.__class__, ImplicitObject), \
+            # 'implicit_object_instance has type {}'.format(type(implicit_object_instance))
 
 
         def does_pass_score_test():     
@@ -1699,7 +1700,7 @@ def build_tree(cell, counter):
 def collapse(cell, implicit_object):
     
     assert isinstance(cell, Cell)
-    assert isinstance(implicit_object, ImplicitObject)
+    # assert isinstance(implicit_object, ImplicitObject)
 
     if cell.is_Root():
         
@@ -1950,13 +1951,15 @@ def derivative_test():
     print(rectangle.derivative_at_point(np.array([[0.9], [1]])))
 
 # In[162]:
+
+
 def main():
 
     from mpl_toolkits.mplot3d import axes3d
     import numpy as np
     import matplotlib.pyplot as plt
     import matplotlib.patches as patches
-
+    import sdf_test
 
     h = ImplicitRectangle(0.1, 0.25, 0.1, 0.9).union(ImplicitRectangle(0.1, 0.6, 0.1, 0.35)).union(ImplicitCircle(0.35, 0.35, 0.25)).intersect(
             (ImplicitCircle(0.35, 0.35, 0.1).union(ImplicitRectangle(0.25, 0.45, 0.1, 0.35))).negate()
@@ -1967,12 +1970,15 @@ def main():
     hi = h.union(i)
 
 
+
+    hi = sdf_test.ImplicitSDF('cat_sdf.txt', -0.01, 1.01, -0.01, 1.01)
+
     # hi = ImplicitStar(0.2, 0.1, 10, 0.5, 0.5)
     # hi = ImplicitTree()
 
 
-    rect_0 = ImplicitRectangle(0.2, 0.6, 0.2, 0.6)
-    hi = rect_0.displace(200, 10)
+    # rect_0 = ImplicitRectangle(0.2, 0.6, 0.2, 0.6)
+    # hi = rect_0.displace(200, 10)
 
 
     # hi.visualize_bitmap(0, 1, 0, 1, 500)
@@ -1986,6 +1992,7 @@ def main():
     # ax1.set_ylim([-0.5, 1.5])
 
     c = Cell(0, 1, 0, 1, 'NotInitialized')
+
     build_tree(c, 7)
     c.initialise_cell_type(hi)
     # c.visualize(ax1)
